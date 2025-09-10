@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.control.*?>
+<?import javafx.geometry.Insets?>
+
+<fx:root type="VBox" xmlns="http://javafx.com/javafx/17" xmlns:fx="http://javafx.com/fxml/1"
+         spacing="6" styleClass="filter-bar">
+
+    <!-- AND/OR 상호 배타 토글 그룹 정의 -->
+    <fx:define>
+        <ToggleGroup fx:id="logicGroup"/>
+    </fx:define>
+
+    <children>
+        <HBox spacing="8" alignment="CENTER_LEFT">
+            <children>
+                <!-- 멀티 선택 메뉴 -->
+                <MenuButton fx:id="typeMenu" text="Type"/>
+                <MenuButton fx:id="sevMenu"  text="Severity"/>
+
+                <!-- 서로 배타 + 기본 AND 선택 -->
+                <ToggleButton fx:id="btnAnd" text="AND" toggleGroup="$logicGroup" selected="true"/>
+                <ToggleButton fx:id="btnOr"  text="OR"  toggleGroup="$logicGroup"/>
+
+                <!-- 텍스트 필드들 -->
+                <TextField fx:id="tfUrl"  promptText="URL contains"   HBox.hgrow="ALWAYS"/>
+
+                <TextField fx:id="tfRisk" promptText="Risk: >=50 | 25-80 | 42" HBox.hgrow="ALWAYS">
+                    <tooltip>
+                        <Tooltip text="숫자(0-100), 비교(&gt;=, &lt;=, &lt;, &gt;), 범위(예: 25-80) 지원"/>
+                    </tooltip>
+                </TextField>
+
+                <TextField fx:id="tfEvi"  promptText="Evidence contains" HBox.hgrow="ALWAYS"/>
+
+                <!-- 날짜 -->
+                <DatePicker fx:id="dpFrom" promptText="From"/>
+                <DatePicker fx:id="dpTo"   promptText="To"/>
+
+                <!-- 동작 버튼들 -->
+                <Button fx:id="btnReset" text="Reset"/>
+                <Button fx:id="btnImportPreset" text="Import Preset" onAction="#onImportPresetFile"/>
+                <Button fx:id="btnExportPreset" text="Export Preset" onAction="#onExportPresetFile"/>
+            </children>
+        </HBox>
+
+        <!-- 활성 필터 칩 영역 -->
+        <FlowPane fx:id="chipsPane" hgap="6" vgap="6">
+            <padding>
+                <Insets top="6" right="6" bottom="6" left="6"/>
+            </padding>
+        </FlowPane>
+    </children>
+
+    <padding>
+        <Insets top="6" right="6" bottom="6" left="6"/>
+    </padding>
+</fx:root>

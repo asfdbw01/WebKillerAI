@@ -1,0 +1,188 @@
+plugins {
+    id 'org.openjfx.javafxplugin' version '0.1.0' apply false
+    id 'org.beryx.jlink' version '2.26.0' apply false
+}
+
+allprojects {
+    group = 'com.webkillerai'
+    version = '0.3.0'
+    repositories { mavenCentral() }
+}
+
+subprojects {
+    apply plugin: 'java'
+    java {
+        toolchain { languageVersion = JavaLanguageVersion.of(17) }
+    }
+    dependencies {
+        testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+        testImplementation 'org.assertj:assertj-core:3.26.0'
+    }
+    tasks.withType(Test).configureEach { useJUnitPlatform() }
+    tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+}
+
+/** ---------------- core ---------------- **/
+project(":core") {
+    dependencies {
+        implementation 'org.yaml:snakeyaml:2.2'
+        implementation 'org.slf4j:slf4j-api:2.0.13'
+        implementation 'org.jsoup:jsoup:1.18.3'
+
+        implementation 'com.openhtmltopdf:openhtmltopdf-core:1.0.10'
+        implementation 'com.openhtmltopdf:openhtmltopdf-pdfbox:1.0.10'
+        implementation 'com.openhtmltopdf:openhtmltopdf-slf4j:1.0.10'
+
+        testRuntimeOnly 'ch.qos.logback:logback-classic:1.5.6'
+    }
+}
+
+/** ------------- app-desktop ------------- **/
+project(":app-desktop") {
+    apply plugin: "application"
+    apply plugin: "org.openjfx.javafxplugin"
+    apply plugin: "org.beryx.jlink"
+
+    application {
+        mainClass = "com.webkillerai.app.app.App"
+        // mainModule = "webkillerai"   // (모듈 런처 경고 제거 원하면 해제)
+    }
+
+    javafx {
+        version = "17"
+        modules = [ "javafx.controls", "javafx.fxml" ]
+    }
+
+    dependencies {
+        implementation project(":core")
+        runtimeOnly 'ch.qos.logback:logback-classic:1.5.6'
+
+        implementation 'com.fasterxml.jackson.core:jackson-databind:2.17.1'
+        implementation 'com.fasterxml.jackson.core:jackson-annotations:2.17.1'
+        implementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.1'
+
+        // Windows용 OpenJFX JAR (클래스패스 실행 보장)
+        implementation "org.openjfx:javafx-base:17:win"
+        implementation "org.openjfx:javafx-graphics:17:win"
+        implementation "org.openjfx:javafx-controls:17:win"
+        implementation "org.openjfx:javafx-fxml:17:win"
+    }
+
+    tasks.named("run", JavaExec).configure {
+        workingDir = rootProject.projectDir
+        javaLauncher = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+    }
+
+    tasks.register('generatePreset', JavaExec) {
+        classpath = sourceSets.main.runtimeClasspath
+        mainClass = 'com.webkillerai.app.tools.PresetExampleMain'
+        workingDir = rootProject.projectDir
+        javaLauncher = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+    }
+
+    // === jlink (포터블 이미지) ===
+    jlink {
+	    imageName = 'WebKillerAI'
+	    mergedModuleName = 'webkillerai'
+	    moduleName = 'webkillerai'
+	    addExtraDependencies("javafx")
+	    options = [
+	        '--strip-debug','--compress','2','--no-header-files','--no-man-pages',
+	        // ⬇️ 이 줄 추가: FXML이 요구하는 JDK 모듈을 이미지에 포함
+	        '--add-modules','java.scripting,jdk.unsupported'
+	    ]
+	
+	    forceMerge 'jackson-core',
+	               'jackson-annotations','jackson-databind','jackson-datatype-jsr310',
+	               'jsoup','openhtmltopdf-core','openhtmltopdf-pdfbox','openhtmltopdf-slf4j'
+	
+	    launcher {
+	        name = 'webkillerai'
+	        jvmArgs = ['-Dfile.encoding=UTF-8','-Dwk.report.showEvidenceDetails=on']
+	    }
+	}
+    
+    // === 후속 작업: 앱 JAR/런타임 JAR 복사 + start.cmd 생성 + ZIP ===
+    tasks.register('copyAppJarToImage') {
+        dependsOn tasks.named('jar')
+        doLast {
+            def src = tasks.named('jar').get().archiveFile.get().asFile
+            def dstDir = file("$buildDir/WebKillerAI/lib")
+            dstDir.mkdirs()
+            copy { from src; into dstDir }
+            println "Copied ${src.name} -> ${dstDir}"
+        }
+    }
+
+    tasks.register('copyRuntimeLibsToImage') {
+        dependsOn tasks.named('jlink')
+        doLast {
+            def dstDir = file("$buildDir/WebKillerAI/lib")
+            dstDir.mkdirs()
+            def jars = configurations.runtimeClasspath.resolve().findAll { it.name.endsWith(".jar") }
+            copy { from jars; into dstDir }
+            println "Copied ${jars.size()} runtime jars -> ${dstDir}"
+        }
+    }
+
+    tasks.register('createStartCmd') {
+	    doLast {
+	        def imgDir = file("$buildDir/WebKillerAI")
+	        imgDir.mkdirs()
+	        def f = new File(imgDir, "start.cmd")
+	        f.text = [
+	            '@echo off',
+	            'setlocal',
+	            'set IMG=%~dp0',
+	            'rem --- JavaFX만 module-path ---',
+	            'set MP=%IMG%\\lib\\javafx-base-17-win.jar;%IMG%\\lib\\javafx-graphics-17-win.jar;%IMG%\\lib\\javafx-controls-17-win.jar;%IMG%\\lib\\javafx-fxml-17-win.jar',
+	            '"%IMG%\\bin\\java.exe" --module-path "%MP%" --add-modules javafx.controls,javafx.fxml -cp "%IMG%\\lib\\*" com.webkillerai.app.app.App',
+	            'endlocal',
+	            ''
+	        ].join(System.lineSeparator())
+	        println "Wrote ${f}"
+	    }
+	}
+
+    tasks.register('portableZip', Zip) {
+        dependsOn 'jlink','copyRuntimeLibsToImage','copyAppJarToImage','createStartCmd'
+        from("$buildDir/WebKillerAI") { into "WebKillerAI" }
+        destinationDirectory = file("$buildDir/distributions")
+        archiveFileName = "WebKillerAI-${project.version}-win_portable.zip"
+    }
+
+    tasks.named('jlink').configure { finalizedBy 'copyRuntimeLibsToImage','copyAppJarToImage','createStartCmd' }
+
+    tasks.register('assemblePortable') {
+        dependsOn 'portableZip'
+        doLast {
+            println "Portable image: $buildDir/WebKillerAI"
+            println "Portable ZIP  : $buildDir/distributions/WebKillerAI-${project.version}-win_portable.zip"
+        }
+    }
+}
+
+/** ------------- smoke-target ------------- **/
+project(":smoke-target") {
+    apply plugin: "application"
+
+    application {
+        mainClass = "dev.SmokeTarget"
+    }
+
+    dependencies {
+        implementation 'org.bouncycastle:bcprov-jdk18on:1.78.1'
+        implementation 'org.bouncycastle:bcpkix-jdk18on:1.78.1'
+    }
+
+    tasks.named("run", JavaExec).configure {
+        workingDir = rootProject.projectDir
+        javaLauncher = javaToolchains.launcherFor {
+            languageVersion = JavaLanguageVersion.of(17)
+        }
+    }
+}

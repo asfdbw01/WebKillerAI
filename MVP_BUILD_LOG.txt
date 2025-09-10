@@ -1,0 +1,132 @@
+==================================================
+WebKillerAI - BUILDLOG (MVP) - 2025-09-10 (KST)
+==================================================
+
+[VERSION] MVP-0.3.5 (rev-2025-09-10)
+[COMPAT] Gradle 8.9 / Java 17 / JavaFX 17
+[DEPS]   openhtmltopdf(core/pdfbox/slf4j)=1.0.10, jsoup=1.18.3, slf4j-api=2.0.13
+         BouncyCastle(bcprov/bcpkix jdk18on)=1.78.1  // smoke-target HTTPS용
+
+[NOTES]
+- 액티브 스캔 아키텍처: DetectorOrchestrator 제거 → ActiveScanRunner + ProbeEngine 일원화(완료).
+- 모드별 기능 매트릭스(FeatureMatrix) 확정: SAFE_PLUS / AGGRESSIVE_LITE 분리, AGGRESSIVE = SAFE_PLUS ∪ AGG_LITE (완료).
+- 게이팅 정책 개선: 파라미터 필요/불필요 디텍터 분리, onQueryOnly 모드별 기본값 차등(SAFE_PLUS=기본 on).
+- Open Redirect “세이프티 넷”: 엔진 매핑 누락 시 최소 1회 직접 감지 시도(완료).
+- OR-only 최적화: 리다이렉트 유사 파라미터 부재 시 ActiveRunner 호출 생략(완료).
+- Evidence 수집 상시 유지. HTML 리포트에서 “요청 라인 + evidenceSnippet” 토글 가능(JSON은 항상 포함).
+- JSON Report v1.2: issues[].requestLine, issues[].evidenceSnippet 항상 포함.
+- 스모크 서버 검증(HTTP/HTTPS) 완료: SAFE / SAFE_PLUS / AGG_LITE / AGGRESSIVE 모드 탐지 정상 동작 확인.
+- smoke-target에 HTTPS(8443) 추가: 자체서명(p12) 자동 생성/로드, Mixed Content 테스트를 HTTPS 문맥에서 재현 가능.
+- JDK 내부 API(sun.security.x509) 의존 제거 → BouncyCastle로 대체(빌드·실행 이슈 제거).
+
+0) 09-06 대비 주요 변경점
+--------------------------------------------------
+- ActiveScanRunner 도입: ProbeEngine 통해 MixedContent / OpenRedirect / PathTraversal(LFI) / SSTI / XSS / SQLi / CORS 실행.
+- 파라미터 디텍터(XSS/SQLi/SSTI/LFI) vs 비파라미터(OR/CORS/Mixed) 분리.
+- onQueryOnly 기본값: SAFE_PLUS=true, AGG_LITE=false.
+- Open Redirect fallback 추가.
+- OR-only fast path: redirect/returnUrl/url/next 키 없으면 ActiveRunner 생략.
+- smoke-target: HTTPS(8443) 지원 + 인덱스/엔드포인트 정리, 텍스트 블록 이슈(문자열 리터럴) 정정.
+
+1) 폴더 구조
+--------------------------------------------------
+- core/                    : 모델/유틸/크롤러/HTTP/스캐너/서비스
+- app-desktop/             : JavaFX UI(App, Controller, ViewModel, FXML)
+- smoke-target/            : 로컬 스모크 서버(/mixed, /redir, /file, /ssti, /cors, /echo, /prod) + HTTPS(8443)
+- out/
+  - reports/{host}/        : 결과 리포트(.json / .html / .pdf)
+  - logs/                  : app.log, scanstats.ndjson
+- scan.yml                 : 스캔 설정(루트)
+- build.gradle / settings.gradle
+
+2) 핵심 구현 요약
+--------------------------------------------------
+- FeatureMatrix
+  • SAFE_PLUS → XSS/SQLi/CORS/OR
+  • AGG_LITE → LFI/SSTI/OR/Mixed
+  • AGGRESSIVE → SAFE_PLUS ∪ AGG_LITE
+  • SAFE → 패시브 전용
+  • endpointCap / maxParamsPerUrlDefault / activeDefaultRps 모드별 기본값 제공
+
+- ScanService
+  • 패시브와 독립된 액티브 전용 RPS/예산/샘플/firstPages 게이트
+  • shouldActiveProbe(): 파라미터 필요 여부 + onQueryOnly 적용
+  • OR-only 최적화
+  • 글로벌 RateLimiter + CC=X 스레드풀 + 역압 큐
+  • 이벤트 로그: scan-start, active-probe, page-scanned, scan-done, task-failed
+
+- ActiveScanRunner
+  • URL/모드 기반 ProbePlan 생성 후 ProbeEngine 위임
+  • 파라미터 후보 가중치(id/url/file 계열 우선), dedupe
+  • OR fallback: 미매핑 시 직접 감지
+  • 비파괴 원칙: GET/HEAD/OPTIONS 범위, 바디 주입 금지
+
+- ProbeEngine
+  • GET(no-redirect)/HEAD/CORS preflight 지원
+  • evidence helper(snippetAround, requestLine, maskSensitive)
+
+- Export
+  • HTML(토글형 evidence), JSON v1.2, PDF
+  • openhtmltopdf 경고는 CSS 서브셋 한계로 무해
+
+3) 스모크 서버 검증(요약)
+--------------------------------------------------
+- HTTP(8080):
+  • SAFE_PLUS: SQLi, CORS, Open Redirect 정상 감지
+  • AGG_LITE:  LFI, SSTI, Mixed(설명/링크), OR 정상 감지
+  • AGGRESSIVE: 위 전체 통합 정상
+  • SAFE: 패시브 전용 헤더 결손(MISSING_SECURITY_HEADER) 위주
+- HTTPS(8443, 자체서명):
+  • Mixed Content는 HTTPS 문맥에서만 의미 있음 → /mixed 링크 통해 정상 재현
+  • HSTS/CTO/XFO/Referrer-Policy 누락 경고 의도적 유지(패시브 확인용)
+
+4) 게이팅/튜닝
+--------------------------------------------------
+- 전역 오버라이드:
+  -Dwk.active.onQueryOnly
+  -Dwk.active.firstPages
+  -Dwk.active.sample
+  -Dwk.active.max
+  -Dwk.active.maxPerHost
+  -Dwk.active.rps
+- 모드별 오버라이드:
+  wk.safeplus.*, wk.agglite.*, wk.aggressive.*
+- OR 휴리스틱 키: redirect, returnurl, url, next
+
+5) 실행/옵션
+--------------------------------------------------
+- 앱 실행:      ./gradlew :app-desktop:run
+- 스모크 서버:  ./gradlew :smoke-target:run
+  • HTTP:  http://localhost:8080
+  • HTTPS: https://localhost:8443  (p12 자동 생성/로드, 최초 경고 정상)
+- 리포트 옵션:
+  -Dwk.report.showEvidenceDetails=on
+  -Dwk.export.alsoJson=true -Dwk.export.pdf=true
+
+6) 테스트/로그
+--------------------------------------------------
+- UI 로그: “Scan starting … mode=SAFE_PLUS|AGG_LITE|AGGRESSIVE” 확인
+- SLOG: active-probe 건수와 page-scanned issues 합이 리포트와 일치
+- PDF 경고 무시 가능
+- 성능: OR-only 최적화로 호출 감소
+
+7) 모드 요약
+--------------------------------------------------
+- SAFE → 패시브 전용
+- SAFE_PLUS → 읽기 전용 액티브 일부(XSS/SQLi/CORS/OR)
+- AGG_LITE → GET 기반 확장(LFI/SSTI/OR/Mixed)
+- AGGRESSIVE → SAFE_PLUS ∪ AGG_LITE
+
+8) 다음 할 일(하이레벨)
+--------------------------------------------------
+- 스모크 케이스 확장: LFI 윈도우 변형 추가, SSTI 변형군, OR 파라미터 바리에이션, CORS 조합
+- ProbePlan 단위 테스트: 모드별 회귀 고정
+- (옵션) 패키징 간소화: jpackage 워크플로(윈도우 exe) — 다음 스프린트에서
+- (보류) Destructive 모드: 설계만 유지
+
+9) 환경
+--------------------------------------------------
+- Gradle 8.9
+- Java 17 toolchain
+- JavaFX 17
+- 실행: :app-desktop:run

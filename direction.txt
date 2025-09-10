@@ -1,0 +1,167 @@
+==================================================
+WebKillerAI — v0.4 Direction LOCK (updated)
+==================================================
+
+[목표]
+- 커버리지 부스트(증거 중심) + 비파괴 원칙 유지(GET/HEAD/OPTIONS).
+- SAFE_PLUS / AGGRESSIVE_LITE에서 읽기 전용 액티브 프로브 수행(POST/PUT 금지).
+- 모든 탐지에서 requestLine + evidenceSnippet 의무 수집
+  · HTML은 표시 토글(수집은 항상 유지), JSON(v1.2)은 항상 포함.
+
+[범위(Scope)]
+- SAFE: 현행 유지(회귀 0 보장).
+- SAFE_PLUS: 쿼리 주입/헤더 변조/프리플라이트(읽기형)만.
+- AGGRESSIVE_LITE(= AGG_LITE): GET 기반 확장(LFI/SSTI/Mixed/OR).
+- (예고) AGGRESSIVE(full): 설계만, 이번 라운드 제외.
+
+[비범위(Non-goals)]
+- 인증/세션 자동 흐름, 폼 제출/파일 업로드, Blind/Time-based SQLi, SSRF/XXE, RCE, DoS 등.
+
+--------------------------------------------------
+오용탐지(필수 / 동작 모드 표기)
+--------------------------------------------------
+1) Reflected XSS  [SAFE_PLUS]
+   - 페이로드: WKAI 폴리글롯 1회.
+   - 신호: 비이스케이프 반사(HTML/JS/URL 컨텍스트).
+   - 증거: requestLine + ±80자 스니펫 + 라이트 컨텍스트 추정.
+
+2) SQLi(오류 기반)  [SAFE_PLUS]
+   - 페이로드: "'" 1회.
+   - 신호: DB 오류 시그니처(SQLSTATE/ORA/MySQL 등).
+   - 증거: requestLine + 오류 스니펫.
+
+3) CORS 오구성  [SAFE_PLUS]
+   - 헤더/프리플라이트: Origin: https://evil.example / null / subdomain.
+   - 신호: ACAO:"*" AND ACAC:true 등.
+   - 증거: 요청 라인/OPTIONS + 응답 헤더 블록.
+
+4) Open Redirect  [SAFE_PLUS | AGGRESSIVE_LITE]
+   - 키: redirect / returnUrl / next / url …
+   - 신호: 3xx + Location 외부 도메인.
+   - 증거: requestLine + Location.
+   - 폴백: 엔진 미매핑이어도 1회 직접 검증(결과 발행).
+   - ① 최적화: 리다이렉트 유사 키 없으면 ActiveRunner 호출 생략.
+
+5) Path Traversal (LFI)  [AGGRESSIVE_LITE]
+   - 페이로드(소량): ../../../../etc/passwd, ..%2f..%2fetc%2fpasswd.
+   - (예정) Windows: ../../../../windows/win.ini.
+   - 신호: "root:x:" 등 서명 토큰.
+   - 증거: requestLine + 본문 스니펫(민감 마스킹).
+
+6) SSTI(라이트)  [AGGRESSIVE_LITE]
+   - 페이로드: {{7*7}} / ${7*7} / <%=7*7%> 각 1회.
+   - 신호: 평가 결과(49) 또는 템플릿 에러.
+   - 증거: requestLine + 결과/에러 스니펫.
+
+7) Mixed Content  [AGGRESSIVE_LITE]
+   - 조건: **HTTPS 문서**.
+   - 신호: 본문/리소스에 http:// 서브리소스.
+   - 증거: 요청 URL + 참조 스니펫.
+   - 비고: HTTP 스모크에서는 미노출이 정상.
+
+8) 보안 헤더/쿠키(보강)  [ALL]
+   - HSTS/CSP/X-Frame-Options/X-Content-Type-Options/Referrer-Policy/Permissions-Policy.
+   - 쿠키: Secure/HttpOnly/SameSite.
+   - 증거: 응답 헤더 스니펫.
+
+(후순위/있으면 포함)
+- Directory Listing, 노출 파일(.env, /.git/HEAD 등).
+
+--------------------------------------------------
+이상탐지(힌트, LOW/INFO)
+--------------------------------------------------
+- 길이 델타(±25%↑), DOM에 <script>/on*, Content-Type 불일치,
+  스택트레이스 토큰("Exception", "Traceback", "at com.").
+
+--------------------------------------------------
+가드레일(안전·성능)
+--------------------------------------------------
+- 메서드: GET/HEAD/OPTIONS. 바디 주입 금지(쿼리/헤더만).
+- URL당 최대 변조 파라미터: SAFE_PLUS 기본 3, AGG_LITE는 FeatureMatrix 값 적용.
+- 각 페이로드 1회/케이스, 중복 억제(url+param+issue 기준).
+- 샘플링/예산: per-run/per-host 상한 초과 시 조기 중단.
+- Evidence 마스킹: /etc/passwd, apiKey/secret/token 등.
+- robots.txt 존중(미존재=allow-all). 캐시: 성공 30분 / 실패 10분.
+- 전용 RateLimiter로 액티브 RPS 분리.
+- 게이트 기본값:
+  · onQueryOnly: SAFE_PLUS=true, AGG_LITE=false
+  · firstPages: 50
+  · sample: 1.0
+
+--------------------------------------------------
+설정 키(실제 반영 + 예약)
+--------------------------------------------------
+# 공통(-D …)
+wk.active.onQueryOnly=true|false
+wk.active.firstPages=50
+wk.active.sample=1.0
+wk.active.max=400
+wk.active.maxPerHost=60
+wk.active.rps=<모드 기본값 또는 지정>
+
+# 프로필별 오버라이드(우선순위 높음)
+wk.safeplus.activeFirstPages / activeOnQueryOnly / sample / rps / maxActive / maxActivePerHost
+wk.agglite.activeFirstPages  / activeOnQueryOnly / sample / rps / maxActive / maxActivePerHost
+
+# ScanConfig / scan.yml (반영됨)
+mode: SAFE | SAFE_PLUS | AGGRESSIVE_LITE
+safePlus.maxParamsPerUrl: 3
+safePlus.xssParamHints: ["q","search","s","query","keyword"]
+safePlus.sqliParamHints: ["id","uid","user","no","prod","cat","page"]
+
+# 예약(키 이름 정정/확장)
+agglite.enablePathTraversal: true
+agglite.enableSSTI: true
+anomaly.sizeDeltaPct: 25
+anomaly.domAddScript: true
+
+--------------------------------------------------
+모듈 배선
+--------------------------------------------------
+core/scanner: ProbeEngine / Detectors(XSS/SQLi/CORS/OR/LFI/SSTI/Mixed/Headers)
+core/model: IssueType(…)/VulnResult(requestLine/evidenceSnippet 사용)
+core/util: UrlParamUtil / DomDiffLite(옵션)
+app-desktop: IssueType 레이블/필터/정렬 반영
+
+--------------------------------------------------
+성능 정책
+--------------------------------------------------
+- BFS 크롤, 동일 URL 중복 제거, depth 2~3 권장.
+- 파라미터 힌트 우선, 상위 N개만 시도.
+- 느린 타깃: per-host 동시성 1~2 자동 제한(역압).
+- OR-only 최적화: 리다이렉트 키 없으면 ActiveRunner 생략.
+
+--------------------------------------------------
+수용 기준
+--------------------------------------------------
+- 회귀: SAFE 결과 v0.3 대비 동일(±1건).
+- 데모/스모크:
+  · SAFE_PLUS: XSS ≥1, SQLi(Error) ≥1 + (CORS/OR/Headers ≥1)
+  · AGG_LITE : LFI ≥1, SSTI ≥1 + (OR/Mixed ≥1, Mixed는 HTTPS에서만)
+- 증거성: 모든 이슈에 requestLine + ±80자 스니펫.
+- 안전: 상태변경/세션파괴/폭주 요청 없음.
+
+--------------------------------------------------
+로그/옵저버빌리티
+--------------------------------------------------
+- NDJSON: 요청수/재시도/지연/동시성 스냅샷.
+- 트레이스 샘플: wk.trace.sampleRate=0.05.
+- HTTP 재시도: wk.http.maxRetries=3 (Retry-After 존중).
+- UI: 런타임 로그 레벨 변경.
+
+--------------------------------------------------
+구현 순서(스프린트)
+--------------------------------------------------
+1) ScanConfig/IssueType 확장  ✅
+2) UrlParamUtil & ProbeEngine 스켈레톤  ✅
+3) Detectors v1: XSS / SQLi / CORS  ✅(SAFE_PLUS)
+4) Detectors v1.5: Open Redirect  ✅(SAFE_PLUS/AGG_LITE, 폴백 + ① 최적화)
+5) Detectors v2: LFI / SSTI  ✅(AGG_LITE)
+6) Mixed/Headers 보강 + Deduper 조립  ⏳(HTTPS 케이스 추가 완료/보강 진행)
+7) 리포트 증거 연동/마스킹  ✅
+8) 스모크/회귀 테스트 및 성능 튜닝  ⏳
+
+[메모]
+- 기본 실행 모드는 SAFE(UI). 실험은 UI 모드 선택 또는 -Dwk.mode=... 사용.
+- 스모크 타깃(:smoke-target)은 HTTP(8080)/HTTPS(8443) 모두 제공.
+  · Mixed는 HTTPS에서만 탐지되는 것이 정상.

@@ -1,0 +1,38 @@
+target: "https://example.com"
+sameDomainOnly: true
+mode: SAFE
+
+# 타임아웃/동시성/리다이렉트
+timeoutMs: 5000
+concurrency: 2
+followRedirects: true
+
+# 깊이: 현재 Crawler가 플랫 필드를 읽음
+maxDepth: 2
+
+# (선택) robots.txt 존중
+crawler:
+  respectRobots: true
+  cacheTtlMinutes: 30
+  # ※ 여기에도 둘 수 있지만(대안), 현재 코드는 최상위 excludePaths를 먼저 찾고,
+  #    없으면 crawler.excludePaths를 찾도록 되어 있음.
+  # excludePaths:
+  #   - "/oauth2"
+  #   - "*/*logout*"
+  #   - "re:\\?.*token=.*"
+
+# 제외 규칙(권장: 최상위)
+excludePaths:
+  - "/oauth2"
+  - "*/*logout*"         # glob: 어떤 경로든 /logout 포함
+  - "re:\\?.*token=.*"   # regex: 쿼리에 token= 이 포함되면 제외
+  - "/admin/"            # prefix: 호스트 상대 경로로도 동작
+
+# 출력 설정
+output:
+  dir: out
+  format: json,html,pdf   # json | html | pdf | 쉼표로 조합
+  alsoJson: false
+  
+# RPS(전역 토큰버킷)
+rps: 7
